@@ -6,6 +6,8 @@ Este guia segue o **passo a passo dos slides do professor** (aulas 2 a 6). Onde 
 
 > Convenções dos slides: todos os comandos de servidor rodam como **root** (por isso o ajuste do PATH da seção 1.1). Reinicie serviços com `service <nome> restart`. Cada etapa termina com uma **Evidência**: é o que o professor quer ver (e o que você deve copiar para o relatório).
 
+> **Marcações de máquina.** Cada seção diz em qual máquina o comando roda: **[INFRA]**, **[E-MAIL]** ou **[CLIENTE]**. Os blocos **➜ Reflexo em outras máquinas** avisam o que precisa ser ajustado em seguida, em outra máquina, quando você mexe naquele ponto. A tabela "Se você mexer em..." da seção 0 reúne tudo isso num só lugar.
+
 ---
 
 ## 0. O que muda em relação aos slides
@@ -17,16 +19,16 @@ Este guia segue o **passo a passo dos slides do professor** (aulas 2 a 6). Onde 
 | Zona reversa `10.168.192.in-addr.arpa` (/24) | Rede /16 | Zona reversa `16.172.in-addr.arpa` e PTR com **dois octetos** (`1.0`, `2.0`) |
 | DHCP entrega IP, gateway e DNS | O trabalho também pede **domínio de busca** | Acrescentar `option domain-name` e `option domain-search` |
 | SSH com senha | Trabalho pede **autenticação por chave** | `ssh-keygen` + `ssh-copy-id` e desativar senha **[EXTRA]** |
-| Não há | Apache, HTTPS, CA local, e-mail | Seções 1.9, 1.10 e 2 **[EXTRA]** |
+| Não há | Apache, HTTPS, CA local, e-mail | Seções 1.8, 1.9 e 2 **[EXTRA]** |
 
 ### Plano de endereçamento
 
-| Máquina | Hostname | Interface | IP |
-|---|---|---|---|
-| Servidor de infraestrutura | `infra.g07rc2.com.br` | `enp0s3` (externa/NAT da VM) | DHCP da VM |
-| | | `enp0s8` (interna) | `172.16.0.1/16` (fixo) |
-| Servidor de e-mail | `mail.g07rc2.com.br` | interna | `172.16.0.2/16` (fixo) |
-| Estação cliente | `cliente` | interna | DHCP, faixa `172.16.1.100–172.16.1.200` |
+| Máquina | Hostname (nome da máquina) | Nome no DNS | Interface | IP |
+|---|---|---|---|---|
+| Servidor de infraestrutura | `infra` | `infra.g07rc2.com.br` (e também `www` e `intranet`) | `enp0s3` (externa/NAT da VM) | DHCP da VM |
+| | | | `enp0s8` (interna) | `172.16.0.1/16` (fixo) |
+| Servidor de e-mail | `mail` | `mail.g07rc2.com.br` | interna | `172.16.0.2/16` (fixo) |
+| Estação cliente | nome padrão (não muda) | não precisa de registro | interna | DHCP, faixa `172.16.1.100–172.16.1.200` |
 
 - Gateway da rede interna: `172.16.0.1` · DNS: `172.16.0.1` · Broadcast: `172.16.255.255`
 - Reserva por MAC: o cliente fica com `172.16.1.50`.
@@ -36,20 +38,59 @@ Este guia segue o **passo a passo dos slides do professor** (aulas 2 a 6). Onde 
 - **Infra**: 2 placas. Adaptador 1 = NAT. Adaptador 2 = Rede interna (ex.: `redeint`).
 - **E-mail** e **Cliente**: 1 placa cada, na mesma Rede interna `redeint`.
 
-### Ordem recomendada
+### Nomes das máquinas (hostname) e nomes do DNS
 
-1. Infra: preparação, rede, NAT (o servidor de e-mail precisa de internet para o `apt-get`).
-2. Infra: DHCP, DNS.
-3. Infra: SSH, Samba, CA, Apache.
-4. E-mail: rede, Postfix, Dovecot.
-5. Cliente: DHCP, CA, testes.
-6. Capturas, repositório, relatório.
+São duas coisas separadas:
+
+- **Hostname** é o nome que a máquina usa para si mesma (comando `hostname`).
+- **Nome no DNS** é um registro da zona (`www`, `intranet`, `mail`, o MX...) que aponta para um IP.
+
+O trabalho cobra os nomes do **DNS**. Mesmo assim, vamos **renomear as duas máquinas servidoras** para `infra` e `mail` (o cliente fica com o nome que já tem), porque assim o hostname bate com o DNS, com o `myhostname` do Postfix e com os certificados. Em cada máquina o nome é definido em **dois lugares**: `hostnamectl set-hostname <nome-curto>` e a linha `127.0.1.1   <nome-curto>.g07rc2.com.br <nome-curto>` em `/etc/hosts`. Confira com `hostname` (nome curto) e `hostname -f` (nome completo).
+
+| Máquina | Comando | Linha no `/etc/hosts` | Onde esse nome aparece depois |
+|---|---|---|---|
+| **[INFRA]** | `hostnamectl set-hostname infra` | `127.0.1.1   infra.g07rc2.com.br infra` | SOA, NS e registro A na zona DNS (1.6) |
+| **[E-MAIL]** | `hostnamectl set-hostname mail` | `127.0.1.1   mail.g07rc2.com.br mail` | `myhostname` do Postfix (2.4), registro A e MX no DNS (1.6), certificado (1.8) |
+
+> Se preferir manter `servidor1`/`servidor2`, também funciona: o trabalho não exige renomear. Nesse caso, troque o nome só nos lugares da última coluna.
+
+### Ordem recomendada (com o que cada etapa precisa antes)
+
+| # | Máquina | Seções | Precisa estar pronto antes | Depois disso, outra máquina pode... |
+|---|---|---|---|---|
+| 1 | **[INFRA]** | 1.1 e 1.2: nome, rede e reboot | VM com 2 placas | Usar `172.16.0.1` como gateway e DNS |
+| 2 | **[INFRA]** | 1.4: NAT | 1.2 | **[E-MAIL]** e **[CLIENTE]** passam a fazer `apt-get` e `ping 8.8.8.8` |
+| 3 | **[INFRA]** | 1.3 DHCP e 1.6 DNS | 1.2 | **[CLIENTE]** pega IP, gateway e DNS |
+| 4 | **[CLIENTE]** | 3.1 e 3.2: rede por DHCP e ferramentas | 1.3 e 1.4 | Testar DHCP e `dig`, e acessar a infra por SSH e Samba |
+| 5 | **[INFRA]** | 1.5 SSH e 1.7 Samba | Cliente com IP (etapa 4) | Testar SSH e Samba a partir do cliente |
+| 6 | **[INFRA]** | 1.8 CA e 1.9 Apache | 1.6 (nomes `www` e `intranet` no DNS) | Gerar `mail.crt`/`mail.key` e `ca.crt` para distribuir |
+| 7 | **[E-MAIL]** | 2.1 e 2.2: nome, rede, pacotes e `ssh` | 1.4 (internet) e 1.6 (DNS) | Receber o certificado por `scp` |
+| 8 | **[INFRA]** e **[E-MAIL]** | 2.3 a 2.7: certificado, Postfix, Dovecot | 1.8 e etapa 7 | **[CLIENTE]** configura a conta de e-mail |
+| 9 | **[CLIENTE]** | 3.3 a 3.5: CA, testes, Thunderbird | Etapas 6 e 8 | Demonstração completa |
+| 10 | Todas | Capturas, repositório, relatório | Tudo funcionando após reboot | |
+
+### Se você mexer em..., confira também
+
+Esta é a tabela para quando algo muda no meio do caminho. Ela diz o que mexer em seguida e em qual máquina.
+
+| Se você mexer em... | Na máquina | Então confira também... |
+|---|---|---|
+| IP da infra (`172.16.0.1`) | **[INFRA]** | DHCP: `routers` e `domain-name-servers` (1.3). DNS: registros A de `infra`, `www`, `intranet` e PTR `1.0` (1.6). **[E-MAIL]**: `gateway` e `nameserver` (2.1). **[CLIENTE]**: comandos de SSH e Samba |
+| IP do e-mail (`172.16.0.2`) | **[E-MAIL]** | DNS: registro A de `mail` e PTR `2.0` (1.6). **[CLIENTE]**: `ssh-copy-id` e `ssh` para esse IP |
+| Hostname de uma máquina | A própria | `/etc/hosts` dela. Se for o e-mail: `myhostname` do Postfix e DNS. Se for a infra: SOA e NS da zona |
+| Nome de serviço (`www`, `intranet`, `mail`) | **[INFRA]** | Zona DNS (aumentar o serial). `ServerName` do Apache (1.9). `subjectAltName` do certificado, que precisa ser **refeito e reinstalado** (1.8). **[CLIENTE]**: conta do Thunderbird |
+| Qualquer arquivo de zona do DNS | **[INFRA]** | Serial maior, `named-checkzone`, `service bind9 restart`. **[CLIENTE]**: testar com `dig` |
+| Rede ou faixa do DHCP | **[INFRA]** | `-s` da regra NAT (1.4), zona reversa (1.6). **[E-MAIL]**: IP e máscara (2.1) |
+| Nome da interface (`enp0s3`, `enp0s8`) | Cada máquina | `interfaces`, `INTERFACESv4` (1.3), `-o` do NAT (1.4), `tcpdump -i` (seção 4) |
+| CA ou certificados | **[INFRA]** | Reinstalar `web.crt`/`web.key` para o Apache. Copiar `mail.crt`/`mail.key` para o **[E-MAIL]**. Reimportar a CA no **[CLIENTE]**. Reiniciar Apache, Postfix e Dovecot |
+| Contas de e-mail (`ana`, `bia`) | **[E-MAIL]** | **[CLIENTE]**: contas do Thunderbird |
+| Chave SSH do cliente | **[CLIENTE]** | `ssh-copy-id` para **cada** servidor, testar, e só depois `PasswordAuthentication no` em cada um |
 
 ---
 
 ## 1. Servidor de infraestrutura
 
-### 1.1 Preparação do ambiente (Aula 2)
+### 1.1 Preparação do ambiente (Aula 2) **[INFRA]**
 
 Instale as ferramentas de diagnóstico:
 
@@ -67,21 +108,25 @@ vim /root/.bashrc
 export PATH=$PATH:/sbin:/bin:/usr/sbin
 ```
 
-Defina o hostname e o `/etc/hosts`:
+**Nome da máquina.** Esta máquina passa a se chamar `infra`:
 
 ```bash
-hostnamectl set-hostname infra.g07rc2.com.br
+hostnamectl set-hostname infra
 ```
 
-Em `/etc/hosts`:
+Em `/etc/hosts`, mantenha a linha `127.0.0.1 localhost` e substitua a linha `127.0.1.1` que já existe por:
 
 ```
 127.0.1.1   infra.g07rc2.com.br infra
 ```
 
-**Evidência:** `hostname`, `whoami`, `pwd`.
+O prompt só mostra `infra` em um terminal novo (o `reboot` de 1.2 já resolve).
 
-### 1.2 Configuração de rede (Aula 2) **[ADAPTADO: Classe B]**
+**Evidência:** `hostname` (mostra `infra`), `hostname -f` (mostra `infra.g07rc2.com.br`), `whoami`, `pwd`.
+
+> **➜ Reflexo em outras máquinas:** nenhum agora. Esse nome só precisa bater com o que a zona DNS usa para a infra (`infra` no SOA, no NS e no registro A, em 1.6), e a zona deste guia já está assim.
+
+### 1.2 Configuração de rede (Aula 2) **[ADAPTADO: Classe B]** **[INFRA]**
 
 Antes de editar, confirme os nomes das interfaces (o nome pode mudar conforme a VM):
 
@@ -114,7 +159,9 @@ reboot
 
 **Evidência:** `ip a` deve mostrar `enp0s3` com IP dinâmico (`scope global dynamic`) e `enp0s8` com `172.16.0.1/16`.
 
-### 1.3 DHCP (Aula 3) **[ADAPTADO: Classe B + domínio de busca]**
+> **➜ Reflexo em outras máquinas:** os nomes das interfaces voltam em três lugares da **infra**: `INTERFACESv4` (1.3), `-o enp0s3` do NAT (1.4) e `tcpdump -i` (seção 4). Se a sua VM usa outros nomes, troque nos três. Já o IP `172.16.0.1` é o gateway e o DNS de todo mundo: aparece no DHCP (1.3), no DNS (1.6), no **[E-MAIL]** (2.1) e nos comandos do **[CLIENTE]**.
+
+### 1.3 DHCP (Aula 3) **[ADAPTADO: Classe B + domínio de busca]** **[INFRA]**
 
 Instale:
 
@@ -178,7 +225,13 @@ systemctl enable isc-dhcp-server
 **Evidência (no cliente):** `ip a` e `ping 172.16.0.1`. O cliente deve receber IP dentro da faixa (ou o `172.16.1.50` da reserva).
 **Evidência (no servidor):** `ip a show enp0s8` e `ping 172.16.1.50`.
 
-### 1.4 Roteamento, NAT e persistência (Aula 3)
+> **➜ Reflexo em outras máquinas:**
+> - **[CLIENTE]**: a placa precisa estar na mesma Rede interna e em DHCP automático (3.1). O MAC da reserva sai de `ip a` no cliente (linha `link/ether`).
+> - O que o DHCP entrega precisa bater com o resto: `routers` = IP da infra, `domain-name-servers` = a máquina com o BIND (1.6), `domain-search` = domínio da zona.
+> - `host cliente` é só um rótulo da reserva. Vale o MAC, não o hostname do cliente.
+> - Se mudar a rede ou a faixa, ajuste também o `-s` do NAT (1.4) e a zona reversa (1.6).
+
+### 1.4 Roteamento, NAT e persistência (Aula 3) **[INFRA]**
 
 Habilite o encaminhamento de pacotes. Edite `/etc/sysctl.conf` e deixe ativa a linha (no slide, é a linha 28):
 
@@ -219,7 +272,9 @@ deve conter:
 
 Do cliente, `ping 8.8.8.8` deve responder (se falhar: `ip_forward`, regra NAT e interface `enp0s3`).
 
-### 1.5 SSH (Aula 4)
+> **➜ Reflexo em outras máquinas:** só depois deste passo o **[E-MAIL]** e o **[CLIENTE]** conseguem rodar `apt-get` e `ping 8.8.8.8`. Se mudar a rede interna, troque o `-s` da regra, rode `iptables-save > /etc/iptables/rules.v4` de novo e reinicie para conferir.
+
+### 1.5 SSH (Aula 4) **[INFRA]** e **[CLIENTE]**
 
 Instale e valide (no **servidor**):
 
@@ -266,7 +321,7 @@ cat ~/aula04-ssh.txt
 ```bash
 ssh-keygen -t ed25519
 ssh-copy-id aluno@172.16.0.1
-ssh-copy-id aluno@172.16.0.2     # depois de configurar o servidor de e-mail
+ssh-copy-id aluno@172.16.0.2     # só depois de 2.2 (lá o usuário aluno é criado)
 ssh aluno@172.16.0.1              # tem que entrar sem pedir senha
 ```
 
@@ -287,7 +342,9 @@ service ssh restart
 
 **Erros comuns (slide 18):** `Connection refused` = serviço parado/porta fechada; `Connection timed out` = IP/rede errada ou VM desligada; `Permission denied` = usuário, senha ou chave errados.
 
-### 1.6 DNS com BIND9 (Aula 6) **[ADAPTADO: domínio e Classe B]**
+> **➜ Reflexo em outras máquinas:** a chave é gerada **no cliente** e precisa ser copiada para **cada** servidor (`ssh-copy-id` para a infra agora e para o e-mail depois de 2.2). Teste a entrada sem senha em cada servidor antes de desativar a senha nele, e faça isso um servidor por vez. A `Port` do `sshd_config` e o `ssh -p` do cliente precisam combinar.
+
+### 1.6 DNS com BIND9 (Aula 6) **[ADAPTADO: domínio e Classe B]** **[INFRA]**
 
 Instale:
 
@@ -420,7 +477,14 @@ Para explicar o `NXDOMAIN` na defesa: o servidor é autoritativo da zona e respo
 
 **Diagnóstico (slide 21):** sem resposta = `bind9`, rede e porta 53 UDP/TCP; `SERVFAIL` = sintaxe, serial, logs; `PTR errado` = zona reversa e octetos do IP. Se o cliente receber `REFUSED`, acrescente em `options { ... }`: `allow-recursion { 172.16.0.0/16; };`.
 
-### 1.7 Samba (Aula 5)
+> **➜ Reflexo em outras máquinas:**
+> - Mexeu na zona? Aumente o serial, rode `named-checkzone` e reinicie o `bind9` (na **infra**).
+> - Nome novo ou alterado: precisa existir também no `ServerName` do Apache (1.9) e no `subjectAltName` do certificado (1.8, que precisa ser refeito e reinstalado).
+> - IP do `mail` alterado: ajuste o IP fixo do **[E-MAIL]** (2.1) e o PTR `2.0`.
+> - **[CLIENTE]**: teste com `dig`. Se o nome do e-mail mudar, refaça a conta do Thunderbird (3.5).
+> - Depois de reiniciar a infra, confira `cat /etc/resolv.conf`: se o `dhclient` da `enp0s3` sobrescrever o arquivo, reponha `search` e `nameserver 127.0.0.1`.
+
+### 1.7 Samba (Aula 5) **[INFRA]** e **[CLIENTE]**
 
 > O trabalho cita "permissões do compartilhamento" na validação (passo 3). Faça pelo menos a versão com grupo e usuário específico.
 
@@ -553,11 +617,14 @@ mount -a
 
 **Logs (evidência):** `/var/log/samba/`.
 
-### 1.8 Autoridade certificadora (CA) local **[EXTRA]**
+> **➜ Reflexo em outras máquinas:** os usuários `aluno` e `professor` e o grupo `ifsulalunos` existem só na **infra**. O **[CLIENTE]** apenas consome (`smbclient`, `fstab`) pelo IP `172.16.0.1`. Usuário novo no Samba precisa de `smbpasswd -a` (a senha do Samba é separada da do Linux).
+
+### 1.8 Autoridade certificadora (CA) local **[EXTRA]** **[INFRA]**
 
 No servidor de infra, em `~/ca`:
 
 ```bash
+apt-get install openssl ssl-cert
 mkdir -p ~/ca && cd ~/ca
 
 openssl genrsa -out ca.key 4096
@@ -608,9 +675,23 @@ chmod 640 /etc/ssl/private/web.key
 chgrp ssl-cert /etc/ssl/private/web.key
 ```
 
+Deixe a CA **pública** (só o `.crt`) disponível para o cliente buscar depois (3.3):
+
+```bash
+cp ~/ca/ca.crt /home/aluno/ca.crt
+chown aluno:aluno /home/aluno/ca.crt
+```
+
 > **Nunca** suba `*.key` (privadas) para o repositório. Use `.gitignore` para `*.key` e `.htpasswd`.
 
-### 1.9 Apache com dois sites (hosts virtuais) **[EXTRA]**
+> **➜ Reflexo em outras máquinas:** este passo gera três coisas que vão para lugares diferentes:
+> - `web.crt` e `web.key`: ficam na **infra** e são usados pelo Apache (1.9).
+> - `mail.crt` e `mail.key`: precisam ser copiados para o **[E-MAIL]** (2.3).
+> - `ca.crt`: precisa ser instalado no **[CLIENTE]** e importado no Firefox e no Thunderbird (3.3).
+>
+> Se você refizer a CA ou qualquer certificado, repita as três cópias e reinicie Apache, Postfix e Dovecot. O `subjectAltName` precisa listar todos os nomes do site: se um nome mudar no DNS, refaça o certificado.
+
+### 1.9 Apache com dois sites (hosts virtuais) **[EXTRA]** **[INFRA]**
 
 ```bash
 apt-get install apache2 apache2-utils
@@ -682,13 +763,17 @@ systemctl enable apache2
 
 Logs separados por site: `/var/log/apache2/` (`www_*.log` e `intranet_*.log`). Falhas para investigar na defesa: acessar a intranet sem credenciais (401 em `intranet_ssl_access.log`) ou errar o caminho (404).
 
+> **➜ Reflexo em outras máquinas:** cada `ServerName` precisa existir no DNS (1.6) e constar no `subjectAltName` do certificado (1.8). No **[CLIENTE]**, o navegador só mostra o cadeado depois de importar a CA (3.3). Para mudar o nome de um site: DNS (com serial maior), `ServerName`, certificado refeito e `service apache2 restart`.
+
 ---
 
-## 2. Servidor de e-mail **[EXTRA]**
+## 2. Servidor de e-mail **[EXTRA]** **[E-MAIL]**
 
 Nessa máquina rodam **só** Postfix (SMTP) e Dovecot (IMAP). Nada de DHCP, DNS ou Apache.
 
-### 2.1 Rede (IP fixo), no estilo dos slides
+> **Antes de começar, precisa estar pronto na infra:** NAT (1.4, para o `apt-get`), DNS com os registros `mail` e MX (1.6) e a CA com `mail.crt` e `mail.key` (1.8).
+
+### 2.1 Nome e rede (IP fixo), no estilo dos slides
 
 Confirme o nome da interface (`ip a`; abaixo uso `enp0s3`). Edite `/etc/network/interfaces`:
 
@@ -710,32 +795,46 @@ search g07rc2.com.br
 nameserver 172.16.0.1
 ```
 
+**Nome da máquina.** Esta máquina passa a se chamar `mail`:
+
 ```bash
-hostnamectl set-hostname mail.g07rc2.com.br
+hostnamectl set-hostname mail
+```
+
+Em `/etc/hosts`, mantenha `127.0.0.1 localhost` e substitua a linha `127.0.1.1` que já existe por:
+
+```
+127.0.1.1   mail.g07rc2.com.br mail
+```
+
+Depois reinicie:
+
+```bash
 reboot
 ```
 
-Em `/etc/hosts`: `127.0.1.1   mail.g07rc2.com.br mail`.
+**Evidência:** `hostname` (mostra `mail`), `hostname -f` (mostra `mail.g07rc2.com.br`), `ip a`, `ping 172.16.0.1` e `ping 8.8.8.8` (se o segundo funcionar, o NAT do servidor de infra está ok).
 
-**Evidência:** `ip a`, `ping 172.16.0.1` e `ping 8.8.8.8` (se o segundo funcionar, o NAT do servidor de infra está ok).
+> **➜ Reflexo em outras máquinas:** o nome `mail` precisa existir no DNS da **infra** (registro A e MX, em 1.6). Ele é o mesmo do `myhostname` do Postfix (2.4) e do certificado `mail.crt` (1.8). O IP `172.16.0.2` precisa ser o mesmo do registro A, do PTR `2.0` e dos comandos `ssh` e `ssh-copy-id` do **[CLIENTE]**.
 
 ### 2.2 Preparação e instalação
 
-Faça a mesma preparação do item 1.1 (PATH do root, `net-tools`, `vim`, `rsyslog`) e instale:
+Faça a mesma preparação do item 1.1 (PATH do root, `net-tools`, `vim`, `rsyslog`; o hostname você já definiu em 2.1) e instale. O `ssh` entra agora porque a infra vai enviar o certificado por `scp` no próximo passo:
 
 ```bash
 apt-get update
-apt-get install postfix dovecot-imapd rsyslog
+apt-get install postfix dovecot-imapd rsyslog ssh
+adduser aluno
 ```
 
-No Postfix, escolha **Internet Site** e `g07rc2.com.br`. O `rsyslog` cria o `/var/log/mail.log`.
+No Postfix, escolha **Internet Site** e `g07rc2.com.br`. O `rsyslog` cria o `/var/log/mail.log`. O usuário `aluno` é o que recebe o `scp` e o `ssh-copy-id` (o root não entra por SSH).
 
-### 2.3 Certificado
+### 2.3 Certificado (sai da infra e chega no e-mail)
 
 No servidor de infra:
 
 ```bash
-scp ~/ca/mail.crt ~/ca/mail.key usuario@172.16.0.2:/tmp/
+scp ~/ca/mail.crt ~/ca/mail.key aluno@172.16.0.2:/tmp/
 ```
 
 No servidor de e-mail:
@@ -818,7 +917,7 @@ service dovecot restart
 systemctl enable postfix dovecot
 ```
 
-SSH: mesmo procedimento do item 1.5 (`apt-get install ssh`, copiar a chave do cliente, desativar senha).
+SSH: o `ssh` já foi instalado em 2.2. Falta copiar a chave do cliente (`ssh-copy-id aluno@172.16.0.2`, rodado no **[CLIENTE]**) e, só depois de testar, desativar a senha aqui, como em 1.5.
 
 ### 2.7 Verificações
 
@@ -827,11 +926,15 @@ ss -tlnp | grep -E ':25|:587|:993'
 tail -f /var/log/mail.log
 ```
 
+> **➜ Reflexo em outras máquinas:** com Postfix e Dovecot no ar, o **[CLIENTE]** precisa ter a CA importada no Thunderbird (3.3) para aceitar o certificado. A conta usa o nome `mail.g07rc2.com.br` (resolvido pelo DNS da infra) e o MX da zona precisa apontar para esse nome. Se mudar o `myhostname`, ajuste também o DNS, o certificado (se o nome do CN/SAN mudar) e a conta do Thunderbird.
+
 ---
 
-## 3. Estação cliente (Debian com interface)
+## 3. Estação cliente (Debian com interface) **[CLIENTE]**
 
 ### 3.1 Rede via DHCP
+
+O cliente mantém o nome que já tem: o trabalho não pede renomear nem registrar o cliente no DNS. Ele só precisa receber tudo pelo DHCP.
 
 Deixe a conexão cabeada em **Automático (DHCP)**. Confira no terminal:
 
@@ -843,6 +946,8 @@ cat /etc/resolv.conf       # nameserver 172.16.0.1 e search g07rc2.com.br
 
 Renovar a concessão: `nmcli connection down "Conexão cabeada 1" && nmcli connection up "Conexão cabeada 1"`.
 
+> **➜ Reflexo em outras máquinas:** o cliente só recebe IP se a **infra** estiver ligada com o DHCP (1.3) no ar, e só instala pacotes se o NAT (1.4) estiver funcionando. Se o cliente não pegar IP, confira também se a Rede interna das VMs tem o mesmo nome.
+
 ### 3.2 Ferramentas
 
 ```bash
@@ -852,7 +957,7 @@ apt-get install dnsutils smbclient cifs-utils thunderbird wireshark curl
 ### 3.3 Instalar a CA no cliente **[EXTRA]**
 
 ```bash
-scp usuario@172.16.0.1:~/ca/ca.crt ~/
+scp aluno@172.16.0.1:ca.crt ~/
 cp ~/ca.crt /usr/local/share/ca-certificates/ca-g07rc2.crt
 update-ca-certificates
 ```
@@ -916,7 +1021,7 @@ Abra no Wireshark e **identifique as etapas** no relatório:
 4. Os dois sites no navegador (autenticação na intranet, cadeado do HTTPS válido e redirecionamento do HTTP).
 5. Envio e leitura de e-mail pelo cliente, mostrando `/var/log/mail.log` no servidor.
 
-**Teste de reinicialização:** reinicie as três máquinas antes da apresentação e repita os passos 1 a 5.
+**Teste de reinicialização:** reinicie as três máquinas antes da apresentação e repita os passos 1 a 5. Ligue nesta ordem: **infra** primeiro (NAT, DHCP e DNS), depois o **e-mail** e por último o **cliente**.
 
 ```bash
 systemctl is-enabled isc-dhcp-server bind9 apache2 ssh smbd nmbd     # infra
@@ -954,6 +1059,7 @@ repo/
 ├── plano-enderecamento.md
 ├── infra/
 │   ├── interfaces
+│   ├── hosts
 │   ├── dhcpd.conf
 │   ├── isc-dhcp-server
 │   ├── named.conf.local
@@ -966,6 +1072,7 @@ repo/
 │   └── apache/ (www.conf, intranet.conf)
 ├── mail/
 │   ├── interfaces
+│   ├── hosts
 │   ├── main.cf
 │   ├── master.cf
 │   └── dovecot/ (arquivos alterados)
